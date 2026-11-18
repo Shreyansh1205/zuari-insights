@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { UploadScreen } from './BusinessModule';
+import StoreBar from '../components/StoreBar';
+import useStoredFiles from '../hooks/useStoredFiles';
 import { headerStyle } from '../theme';
 
 function parseCustomerExcel(file) {
@@ -81,16 +83,23 @@ export default function CustomerModule({ onBack }) {
   const [cityFilter, setCityFilter] = useState('all');
   const inputRef = useRef(null);
 
-  const handleFiles = async (fileList) => {
+  const replaceRef = useRef(null);
+
+  // fromServer = true when the file comes from MongoDB (no re-upload)
+  const handleFiles = async (fileList, fromServer = false) => {
     const files = Array.from(fileList || []).filter(f => /\.xlsx?$/i.test(f.name));
     if (!files.length) { setError('Upload .xlsx or .xls file'); return; }
+    const file = files[files.length - 1];
     setLoading(true); setError('');
     try {
-      const parsed = await parseCustomerExcel(files[0]);
+      const parsed = await parseCustomerExcel(file);
       setData(parsed.rows);
+      if (!fromServer) await store.save([file]);   // replaces the previous file on the server
     } catch (err) { setError(err.message || 'Failed to parse file'); }
     finally { setLoading(false); }
   };
+
+  const store = useStoredFiles('customers', (files) => handleFiles(files, true));
 
   const states = useMemo(() => [...new Set(data.map(r => r.state))].filter(s => s && s !== 'Unknown').sort(), [data]);
   const cities = useMemo(() => {
@@ -150,13 +159,16 @@ export default function CustomerModule({ onBack }) {
         title="Customer Master"
         desc="Upload Customer Data Excel to view customer list, contacts and locations."
         color="#2f7bff"
-        loading={loading}
-        error={error}
+        loading={loading || store.booting || !!store.saving}
+        loadingText={store.booting ? 'Loading uploaded data…' : store.saving || undefined}
+        readOnly={!store.canUpload}
+        error={error || store.storeError}
         dragOver={dragOver}
         setDragOver={setDragOver}
         onFiles={handleFiles}
         onBack={onBack}
         inputRef={inputRef}
+        multiple={false}
         features={['Search & filters', 'State / City analytics', 'PDF Export']}
       />
     );
@@ -174,9 +186,12 @@ export default function CustomerModule({ onBack }) {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={styles.btnGhost} onClick={downloadPDF}>⬇ PDF</button>
-          <button style={styles.btnGhost} onClick={() => setData([])}>Upload New</button>
+          {store.canUpload && <button style={styles.btnGhost} onClick={() => replaceRef.current?.click()}>⬆ Replace file</button>}
+          <input ref={replaceRef} type="file" accept=".xlsx,.xls" hidden onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
         </div>
       </header>
+      <StoreBar store={store} />
+      {error && <div className="zi-err" style={{ margin: '12px 20px 0' }}>⚠ {error}</div>}
 
       <div id="customer-content">
         {/* KPIs */}

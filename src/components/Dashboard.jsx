@@ -38,7 +38,7 @@ ChartJS.register(
 ChartJS.defaults.font.family = "Manrope, Inter, system-ui, sans-serif";
 ChartJS.defaults.color = '#5f6f88';
 
-export default function Dashboard({ data = [], filesData = [], years = [], onReset, onRemoveFile, onAddMore, onBack }) {
+export default function Dashboard({ data = [], filesData = [], years = [], onReset, onRemoveFile, onAddMore, onBack, sourceNote }) {
   // Safety guard
   if (!data || data.length === 0) {
     return (
@@ -323,10 +323,11 @@ export default function Dashboard({ data = [], filesData = [], years = [], onRes
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {onBack && <button className="btn btn-ghost" onClick={onBack}>← Modules</button>}
           <button className="btn btn-ghost" onClick={downloadPDF}>⬇ Download PDF</button>
-          <button className="btn btn-ghost" onClick={onAddMore}>+ Add File</button>
-          <button className="btn btn-ghost" onClick={onReset}>Upload New</button>
+          {onAddMore && <button className="btn btn-ghost" onClick={onAddMore}>+ Add File</button>}
+          {onReset && <button className="btn btn-ghost" onClick={onReset}>Clear all</button>}
         </div>
       </header>
+      {sourceNote}
 
       <div id="dashboard-content">
 
@@ -336,7 +337,7 @@ export default function Dashboard({ data = [], filesData = [], years = [], onRes
           {filesData.map(f => (
             <span key={f.fileName} style={s.fileChip}>
               📄 {f.fileName}
-              <button style={s.fileRemove} onClick={() => onRemoveFile(f.fileName)}>×</button>
+              {onRemoveFile && <button style={s.fileRemove} title="Remove this file" onClick={() => onRemoveFile(f.fileName)}>×</button>}
             </span>
           ))}
         </div>
@@ -425,7 +426,7 @@ export default function Dashboard({ data = [], filesData = [], years = [], onRes
             <div style={s.emptyState}>
               <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Upload files from different financial years</p>
               <p style={{ color: '#5f6f88', marginBottom: 16 }}>Add another FY's Business Report to enable year-over-year comparison.</p>
-              <button className="btn btn-primary" onClick={onAddMore}>+ Add Another File</button>
+              {onAddMore && <button className="btn btn-primary" onClick={onAddMore}>+ Add Another File</button>}
             </div>
           ) : (
             <>

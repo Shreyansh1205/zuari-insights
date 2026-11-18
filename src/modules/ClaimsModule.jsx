@@ -7,6 +7,8 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { UploadScreen } from './BusinessModule';
+import StoreBar from '../components/StoreBar';
+import useStoredFiles from '../hooks/useStoredFiles';
 import {
   parseClaimsWorkbook, buildHistory, viewForSnapshot, fmtINR, fmtFull, fmtDate, AGE_BANDS,
 } from './claimsData';
@@ -73,14 +75,16 @@ export default function ClaimsModule({ onBack }) {
   const inputRef = useRef(null);
   const addRef = useRef(null);
 
-  const handleFiles = async (fileList) => {
+  // fromServer = true when the files come from MongoDB (no re-upload)
+  const handleFiles = async (fileList, fromServer = false) => {
     const files = Array.from(fileList || []).filter((x) => /\.xlsx?$/i.test(x.name));
     if (!files.length) { setError('Please upload .xlsx or .xls files.'); return; }
     setLoading(true); setError('');
     const errs = [];
     const added = [];
+    const okFiles = [];
     for (const file of files) {
-      try { added.push(...(await parseClaimsWorkbook(file))); } catch (e) { errs.push(e.message); }
+      try { added.push(...(await parseClaimsWorkbook(file))); okFiles.push(file); } catch (e) { errs.push(e.message); }
     }
     if (added.length) {
       setSnapshots((prev) => {
@@ -92,8 +96,13 @@ export default function ClaimsModule({ onBack }) {
       window.scrollTo({ top: 0 });
     }
     if (errs.length) setError(errs.join(' · '));
+    if (!fromServer && okFiles.length) await store.save(okFiles);
     setLoading(false);
   };
+
+  // saved files arrive oldest first, so a re-uploaded month wins
+  const store = useStoredFiles('claims', (files) => handleFiles(files, true));
+  const resetFilters = () => setF({ party: 'all', age: 'all', insured: 'all', insurer: 'all', change: 'all', q: '' });
 
   const history = useMemo(() => (snapshots.length ? buildHistory(snapshots) : null), [snapshots]);
   const idx = history ? (snapIndex < 0 || snapIndex >= history.snaps.length ? history.snaps.length - 1 : snapIndex) : -1;
@@ -106,8 +115,10 @@ export default function ClaimsModule({ onBack }) {
       <UploadScreen
         title="Claims Pending"
         desc="Upload the monthly Claims Pending sheet. Add several months (e.g. 31-Aug and 30-Sep) to see how each claim's remarks moved."
-        loading={loading}
-        error={error}
+        loading={loading || store.booting || !!store.saving}
+        loadingText={store.booting ? 'Loading uploaded data…' : store.saving || undefined}
+        readOnly={!store.canUpload}
+        error={error || store.storeError}
         dragOver={dragOver}
         setDragOver={setDragOver}
         onFiles={handleFiles}
@@ -312,9 +323,14 @@ export default function ClaimsModule({ onBack }) {
           <div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
               <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={onBack}>← Dashboards</button>
-              <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={() => addRef.current?.click()}>+ Add month</button>
-              <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={() => { setSnapshots([]); setF({ party: 'all', age: 'all', insured: 'all', insurer: 'all', change: 'all', q: '' }); }}>Upload new</button>
-              <input ref={addRef} type="file" accept=".xlsx,.xls" multiple hidden onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+              {store.canUpload && <>
+                <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={() => addRef.current?.click()}>+ Add month</button>
+                <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={async () => {
+                  if (!window.confirm('Remove ALL Claims files from the server? The admin will no longer see them.')) return;
+                  await store.clear(); setSnapshots([]); resetFilters();
+                }}>Clear all</button>
+                <input ref={addRef} type="file" accept=".xlsx,.xls" multiple hidden onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+              </>}
             </div>
             <span className="zi-chip">CLAIMS PENDING · NON-GHI</span>
             <h1 style={{ marginTop: 10 }}>Status as on {snap.label}</h1>
@@ -327,6 +343,7 @@ export default function ClaimsModule({ onBack }) {
               </div>
             )}
             {error && <div className="zi-err" style={{ maxWidth: 640 }}>⚠ {error}</div>}
+            {store.saving && <div className="zi-chip" style={{ marginTop: 10 }}>{store.saving}</div>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'stretch' }}>
             <button className="btn btn-gold" onClick={exportPDF} disabled={!!busy}>{busy === 'pdf' ? 'Preparing PDF…' : '⬇ Download PDF report'}</button>
@@ -335,6 +352,7 @@ export default function ClaimsModule({ onBack }) {
         </div>
         <div style={{ height: 46 }} />
       </div>
+      <StoreBar store={store} />
 
       <div className="cl-main">
         {/* ---------- KPIs ---------- */}
@@ -504,9 +522,9 @@ export default function ClaimsModule({ onBack }) {
               </>
             ) : (
               <>
-                <div className="cl-card" style={{ background: '#fffaf0', borderColor: '#f2e2bd' }}>
+                {store.canUpload && <div className="cl-card" style={{ background: '#fffaf0', borderColor: '#f2e2bd' }}>
                   <b style={{ fontSize: 13 }}>Tip:</b> <span style={{ fontSize: 13 }}>add last month's file with <b>+ Add month</b> to see exactly which remarks changed, which claims are new and which were closed.</span>
-                </div>
+                </div>}
                 {['Insurer', 'Surveyor', 'Insured', 'Other', 'Unspecified'].filter((p) => rows.some((r) => r.party === p)).map((p) => (
                   <div key={p}>
                     <div className="zi-section-title" style={{ margin: '4px 0 12px' }}>PENDING WITH {p.toUpperCase()} · {rows.filter((r) => r.party === p).length}</div>

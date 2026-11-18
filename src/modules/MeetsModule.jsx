@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { UploadScreen } from './BusinessModule';
+import StoreBar from '../components/StoreBar';
+import useStoredFiles from '../hooks/useStoredFiles';
 import { headerStyle } from '../theme';
 
 function parseMeetsExcel(file) {
@@ -80,16 +82,23 @@ export default function MeetsModule({ onBack }) {
   const [statusFilter, setStatusFilter] = useState('all'); // all | done | pending
   const inputRef = useRef(null);
 
-  const handleFiles = async (fileList) => {
+  const replaceRef = useRef(null);
+
+  // fromServer = true when the file comes from MongoDB (no re-upload)
+  const handleFiles = async (fileList, fromServer = false) => {
     const files = Array.from(fileList || []).filter(f => /\.xlsx?$/i.test(f.name));
-    if (!files.length) { setError('Upload .xlsx or .xls'); return; }
+    if (!files.length) { setError('Upload .xlsx or .xls file'); return; }
+    const file = files[files.length - 1];
     setLoading(true); setError('');
     try {
-      const parsed = await parseMeetsExcel(files[0]);
+      const parsed = await parseMeetsExcel(file);
       setData(parsed.rows);
+      if (!fromServer) await store.save([file]);   // replaces the previous file on the server
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
+
+  const store = useStoredFiles('meets', (files) => handleFiles(files, true));
 
   const companies = useMemo(() => [...new Set(data.map(r => r.company))].filter(Boolean).sort(), [data]);
   const isDone = (r) => {
@@ -155,13 +164,16 @@ export default function MeetsModule({ onBack }) {
         title="Customer Meets"
         desc="Upload Customer Meet Excel to track meetings, greetings and follow-ups."
         color="#d8b26a"
-        loading={loading}
-        error={error}
+        loading={loading || store.booting || !!store.saving}
+        loadingText={store.booting ? 'Loading uploaded data…' : store.saving || undefined}
+        readOnly={!store.canUpload}
+        error={error || store.storeError}
         dragOver={dragOver}
         setDragOver={setDragOver}
         onFiles={handleFiles}
         onBack={onBack}
         inputRef={inputRef}
+        multiple={false}
         features={['Meeting status', 'Company analytics', 'Follow-up tracking', 'PDF Export']}
       />
     );
@@ -179,9 +191,12 @@ export default function MeetsModule({ onBack }) {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={styles.btnGhost} onClick={downloadPDF}>⬇ PDF</button>
-          <button style={styles.btnGhost} onClick={() => setData([])}>Upload New</button>
+          {store.canUpload && <button style={styles.btnGhost} onClick={() => replaceRef.current?.click()}>⬆ Replace file</button>}
+          <input ref={replaceRef} type="file" accept=".xlsx,.xls" hidden onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
         </div>
       </header>
+      <StoreBar store={store} />
+      {error && <div className="zi-err" style={{ margin: '12px 20px 0' }}>⚠ {error}</div>}
 
       <div id="meets-content">
         <div style={styles.kpiRow}>
