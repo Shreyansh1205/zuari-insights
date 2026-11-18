@@ -16,9 +16,14 @@ export async function getDb() {
   if (!uri) throw new Error('MONGODB_URI is not set');
   if (!cached.client) {
     if (!cached.promise) {
-      cached.promise = new MongoClient(uri, { maxPoolSize: 5 }).connect();
+      cached.promise = new MongoClient(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 8000 }).connect();
     }
-    cached.client = await cached.promise;
+    try {
+      cached.client = await cached.promise;
+    } catch (err) {
+      cached.promise = null; // don't keep a failed connection; retry on the next request
+      throw err;
+    }
   }
   const db = cached.client.db(dbName);
   if (!cached.indexed) {
