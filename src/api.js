@@ -98,6 +98,19 @@ export const MODULE_TITLES = {
   meets: 'Customer Meets',
 };
 
+export function timeAgo(d) {
+  if (!d) return '';
+  const s = Math.max(0, (Date.now() - new Date(d).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} hr${h > 1 ? 's' : ''} ago`;
+  const days = Math.floor(h / 24); if (days < 30) return `${days} day${days > 1 ? 's' : ''} ago`;
+  return fmtWhen(d);
+}
+
+export const initials = (name = '') =>
+  name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?';
+
 export function fmtWhen(d) {
   if (!d) return '—';
   const dt = new Date(d);

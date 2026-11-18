@@ -320,7 +320,7 @@ export default function ClaimsModule({ onBack }) {
       <div className="cl-band">
         <div className="scene"><Suspense fallback={null}><DataScene variant="band" /></Suspense></div>
         <div className="cl-band-inner">
-          <div>
+          <div className="cl-band-main">
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
               <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={onBack}>← Dashboards</button>
               {store.canUpload && <>
@@ -343,7 +343,7 @@ export default function ClaimsModule({ onBack }) {
               </div>
             )}
             {error && <div className="zi-err" style={{ maxWidth: 640 }}>⚠ {error}</div>}
-            {store.saving && <div className="zi-chip" style={{ marginTop: 10 }}>{store.saving}</div>}
+            <StoreBar store={store} dark />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'stretch' }}>
             <button className="btn btn-gold" onClick={exportPDF} disabled={!!busy}>{busy === 'pdf' ? 'Preparing PDF…' : '⬇ Download PDF report'}</button>
@@ -352,7 +352,6 @@ export default function ClaimsModule({ onBack }) {
         </div>
         <div style={{ height: 46 }} />
       </div>
-      <StoreBar store={store} />
 
       <div className="cl-main">
         {/* ---------- KPIs ---------- */}
