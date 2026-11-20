@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { parseReportWorkbook, REPORT_SHEET } from './claimsReport';
 
 /* =========================================================
    Claims Pending — parser + month-on-month history builder
@@ -199,9 +200,13 @@ export function parseClaimsWorkbook(file) {
     reader.onload = (e) => {
       try {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
-        const snaps = wb.SheetNames.map((n) => parseSheet(wb.Sheets[n], n, file)).filter(Boolean);
-        if (!snaps.length) return reject(new Error(`${file.name}: no sheet with an "Insured Name" header was found.`));
-        resolve(snaps);
+        // Monthly registers: prefer sheets named "...pending...", never the report/movement sheets
+        const pendingNames = wb.SheetNames.filter((n) => /pend/i.test(n));
+        const names = pendingNames.length ? pendingNames : wb.SheetNames.filter((n) => !REPORT_SHEET.test(n));
+        const snaps = names.map((n) => parseSheet(wb.Sheets[n], n, file)).filter(Boolean);
+        const report = parseReportWorkbook(wb, file);
+        if (!snaps.length && !report) return reject(new Error(`${file.name}: no claim-pending sheet (with an "Insured Name" header) or PPT sheet was found.`));
+        resolve({ snaps, report });
       } catch (err) { reject(err); }
     };
     reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));

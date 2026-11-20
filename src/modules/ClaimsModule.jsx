@@ -9,6 +9,8 @@ import { jsPDF } from 'jspdf';
 import { UploadScreen } from './BusinessModule';
 import StoreBar from '../components/StoreBar';
 import useStoredFiles from '../hooks/useStoredFiles';
+import ClaimsPPT from './ClaimsPPT';
+import { PPT_BUCKETS } from './claimsReport';
 import {
   parseClaimsWorkbook, buildHistory, viewForSnapshot, fmtINR, fmtFull, fmtDate, AGE_BANDS,
 } from './claimsData';
@@ -63,6 +65,7 @@ const moneyAxis = { ticks: { callback: (v) => fmtINR(v).replace('₹ ', '₹') }
 
 export default function ClaimsModule({ onBack }) {
   const [snapshots, setSnapshots] = useState([]);
+  const [reports, setReports] = useState([]); // PPT / management report per month
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState(false);
@@ -82,9 +85,22 @@ export default function ClaimsModule({ onBack }) {
     setLoading(true); setError('');
     const errs = [];
     const added = [];
+    const addedReports = [];
     const okFiles = [];
     for (const file of files) {
-      try { added.push(...(await parseClaimsWorkbook(file))); okFiles.push(file); } catch (e) { errs.push(e.message); }
+      try {
+        const { snaps, report } = await parseClaimsWorkbook(file);
+        added.push(...snaps);
+        if (report) addedReports.push(report);
+        okFiles.push(file);
+      } catch (e) { errs.push(e.message); }
+    }
+    if (addedReports.length) {
+      setReports((prev) => {
+        const map = new Map(prev.map((r) => [r.key || r.id, r]));
+        addedReports.forEach((r) => map.set(r.key || r.id, r)); // same month uploaded again → replace
+        return [...map.values()].sort((a, b) => (a.key || '').localeCompare(b.key || ''));
+      });
     }
     if (added.length) {
       setSnapshots((prev) => {
@@ -132,6 +148,14 @@ export default function ClaimsModule({ onBack }) {
 
   const { rows, closed, snap, prevSnap } = view;
   const multi = history.snaps.length > 1;
+  // PPT report for the selected month (falls back to the latest one uploaded)
+  const snapKey = snap.date ? `${snap.date.getFullYear()}-${String(snap.date.getMonth() + 1).padStart(2, '0')}` : '';
+  const report = reports.find((r) => r.key === snapKey) || (idx === history.snaps.length - 1 ? reports[reports.length - 1] : null) || null;
+  const reportMatches = !!report && report.key === snapKey;
+  const showCompany = (insured) => {
+    drill({ insured });
+    setTimeout(() => document.getElementById('cl-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  };
 
   // ---------- KPIs ----------
   const tInitial = sum(rows, 'initial');
@@ -233,6 +257,36 @@ export default function ClaimsModule({ onBack }) {
         'Insured Name': r.insured, 'Nature of Incidence': r.nature, Insurer: r.insurer, 'Initial Amount Claimed': r.initial, 'Last Remark': r.remark, 'Last Seen': r.label,
       }))), 'Closed since last');
     }
+    if (report?.ppt?.ageing) {
+      const ag = report.ppt.ageing;
+      const line = (r) => {
+        const o = { Company: r.name, 'Settled (claims)': r.settled.claims, 'Settled (₹)': Math.round(r.settled.amount) };
+        PPT_BUCKETS.forEach((bk) => { o[`${bk} mo (claims)`] = r.buckets[bk].claims; o[`${bk} mo (₹)`] = Math.round(r.buckets[bk].amount); });
+        o['Total claims'] = r.claims; o['Total amount (₹)'] = Math.round(r.amount);
+        return o;
+      };
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...ag.rows.map(line), line({ ...ag.total, name: 'Grand Total' })]), 'PPT Ageing MIS');
+    }
+    if (report?.ppt?.pendingAt) {
+      const pend = [];
+      ['Insurer', 'Surveyor', 'Insured'].forEach((p) => {
+        const blk = report.ppt.pendingAt[p];
+        if (!blk) return;
+        blk.rows.forEach((r) => pend.push({ 'Pending at': p, Company: r.name, Claims: r.claims, 'Amount (₹)': Math.round(r.amount) }));
+        pend.push({ 'Pending at': p, Company: 'Grand Total', Claims: blk.total.claims, 'Amount (₹)': Math.round(blk.total.amount) });
+      });
+      if (pend.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pend), 'PPT Pending At');
+    }
+    if (report?.trend?.length) {
+      const fields = [['opening', 'Opening'], ['revision', 'Effect of revision'], ['received', 'Claims received'], ['settled', 'Claims settled'], ['withdrawn', 'Claims withdrawn'], ['closing', 'Closing']];
+      const tr = [];
+      fields.forEach(([fk, l]) => {
+        const c = { Metric: `${l} (claims)` }; const am = { Metric: `${l} (₹)` };
+        report.trend.forEach((t) => { c[t.label] = t[fk].count; am[t.label] = Math.round(t[fk].amount); });
+        tr.push(c, am);
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tr), 'Monthly Movement');
+    }
     XLSX.writeFile(wb, `Claims_Pending_Report_${snap.label.replace(/\s+/g, '-')}.xlsx`);
   };
 
@@ -253,6 +307,26 @@ export default function ClaimsModule({ onBack }) {
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10);
       pdf.text(`Status as on ${snap.label}${prevSnap ? `  ·  compared with ${prevSnap.label}` : ''}  ·  Generated ${fmtDate(new Date())}`, 12, 18);
       let y = 30;
+      const pptEl = document.getElementById('cl-ppt-capture');
+      if (pptEl) {
+        // Management summary (PPT) — sliced across as many pages as it needs
+        const canvas = await html2canvas(pptEl, { scale: 1.5, backgroundColor: '#eef2f9', useCORS: true });
+        const iw = W - 20;
+        const pxPerMm = canvas.width / iw;
+        let sy = 0; let first = true;
+        while (sy < canvas.height) {
+          const top = first ? 30 : 10;
+          const sliceH = Math.min(canvas.height - sy, Math.floor((H - top - 8) * pxPerMm));
+          const part = document.createElement('canvas');
+          part.width = canvas.width; part.height = sliceH;
+          part.getContext('2d').drawImage(canvas, 0, sy, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+          if (!first) pdf.addPage();
+          pdf.addImage(part.toDataURL('image/jpeg', 0.9), 'JPEG', 10, top, iw, sliceH / pxPerMm);
+          sy += sliceH; first = false;
+        }
+        pdf.addPage();
+        y = 12;
+      }
       if (el) {
         const canvas = await html2canvas(el, { scale: 1.6, backgroundColor: '#eef2f9', useCORS: true });
         const img = canvas.toDataURL('image/jpeg', 0.92);
@@ -327,7 +401,7 @@ export default function ClaimsModule({ onBack }) {
                 <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={() => addRef.current?.click()}>+ Add month</button>
                 <button className="btn btn-ghost" style={{ padding: '8px 14px', fontSize: 13 }} onClick={async () => {
                   if (!window.confirm('Remove ALL Claims files from the server? The admin will no longer see them.')) return;
-                  await store.clear(); setSnapshots([]); resetFilters();
+                  await store.clear(); setSnapshots([]); setReports([]); resetFilters();
                 }}>Clear all</button>
                 <input ref={addRef} type="file" accept=".xlsx,.xls" multiple hidden onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
               </>}
@@ -354,8 +428,28 @@ export default function ClaimsModule({ onBack }) {
       </div>
 
       <div className="cl-main">
+        {/* ---------- Management summary from the PPT sheet ---------- */}
+        {report && (
+          <ClaimsPPT
+            report={report}
+            insureds={[...new Set(rows.map((r) => r.insured))]}
+            onCompany={showCompany}
+            registerCount={reportMatches ? rows.length : null}
+          />
+        )}
+        {report && !reportMatches && (
+          <div className="pp-note">The PPT summary above is for <b>{report.label}</b>; the register below is as on <b>{snap.label}</b>.</div>
+        )}
+
+        {report && (
+          <div id="cl-detail" className="pp-divider">
+            <span>DETAILED CLAIM REGISTER</span>
+            <small>Claim-pending sheet{history.snaps.length > 1 ? 's' : ''} · status as on {snap.label}</small>
+          </div>
+        )}
+
         {/* ---------- KPIs ---------- */}
-        <div className="cl-kpis">
+        <div id={report ? undefined : 'cl-detail'} className={`cl-kpis${report ? ' flat' : ''}`}>
           <div className="cl-kpi" style={{ '--c': Z.azure }}><small>Pending claims</small><b>{rows.length}</b><span>{prevSnap ? `${rows.length - prevSnap.rows.length >= 0 ? '+' : ''}${rows.length - prevSnap.rows.length} vs ${prevSnap.label}` : `${new Set(rows.map((r) => r.insured)).size} insureds`}</span></div>
           <div className="cl-kpi" style={{ '--c': Z.gold }}><small>Amount claimed</small><b>{fmtINR(tCurrent)}</b><span>Initial {fmtINR(tInitial)}</span></div>
           <div className="cl-kpi" style={{ '--c': Z.teal }}><small>Settled so far</small><b>{fmtINR(tSettled)}</b><span>{rows.filter((r) => r.settled > 0).length} part-settled</span></div>
